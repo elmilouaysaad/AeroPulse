@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: AeroPulse Observability
+    orgId: 1
+    folder: AeroPulse
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 10
+    options:
+      path: /var/lib/grafana/dashboards-json
+      foldersFromFilesStructure: false

@@ -1,0 +1,9 @@
+groups:
+  - name: aeropulse_recording
+    interval: 15s
+    rules:
+      - record: aeropulse:polls_per_sec:rate5m
+        expr: sum(rate(aeropulse_polls_total[5m])) by (status)
+
+      - record: aeropulse:api_latency_p95:rate5m
+        expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))

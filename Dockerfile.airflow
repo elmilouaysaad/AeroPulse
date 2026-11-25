@@ -1,0 +1,8 @@
+FROM apache/airflow:slim-2.10.0-python3.12
+
+# Layer 1: packages whose resolution is fast and deterministic
+RUN pip install --no-cache-dir --timeout 120 --retries 10 \
+    "psycopg2-binary>=2.9.9" \
+    "psycopg[binary]>=3.2.0" \
+    "redis>=5.0.0" \
+    "qdrant-client[fastembed]==1.15.1"

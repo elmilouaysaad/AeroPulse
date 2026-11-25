@@ -1,0 +1,29 @@
+FROM apache/spark:3.5.3-scala2.12-java17-python3-ubuntu
+
+USER root
+
+# pandas + pyarrow: required by applyInPandasWithState
+# psycopg[binary]: required by detector.py's merge step (JDBC idempotency)
+# Installed to /opt/py-deps to avoid touching the image's site-packages.
+RUN mkdir -p /opt/py-deps && \
+    python3 -m pip install --no-cache-dir --target=/opt/py-deps \
+        pandas==2.2.3 \
+        pyarrow==17.0.0 \
+        "psycopg[binary]==3.2.3"
+
+# Pre-bake Kafka SQL connector + PostgreSQL JDBC driver so spark-submit
+# doesn't fetch Hadoop client JARs or hit Ivy at container startup.
+RUN set -e; \
+    JARS_DIR=/opt/spark/jars; \
+    curl -fsSL -o ${JARS_DIR}/spark-sql-kafka-0-10_2.12-3.5.3.jar \
+      https://repo1.maven.org/maven2/org/apache/spark/spark-sql-kafka-0-10_2.12/3.5.3/spark-sql-kafka-0-10_2.12-3.5.3.jar; \
+    curl -fsSL -o ${JARS_DIR}/spark-token-provider-kafka-0-10_2.12-3.5.3.jar \
+      https://repo1.maven.org/maven2/org/apache/spark/spark-token-provider-kafka-0-10_2.12/3.5.3/spark-token-provider-kafka-0-10_2.12-3.5.3.jar; \
+    curl -fsSL -o ${JARS_DIR}/kafka-clients-3.4.1.jar \
+      https://repo1.maven.org/maven2/org/apache/kafka/kafka-clients/3.4.1/kafka-clients-3.4.1.jar; \
+    curl -fsSL -o ${JARS_DIR}/commons-pool2-2.11.1.jar \
+      https://repo1.maven.org/maven2/org/apache/commons/commons-pool2/2.11.1/commons-pool2-2.11.1.jar; \
+    curl -fsSL -o ${JARS_DIR}/postgresql-42.7.4.jar \
+      https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.4/postgresql-42.7.4.jar
+
+ENV PYTHONPATH="/opt/py-deps:/opt/spark/work-dir"

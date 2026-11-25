@@ -1,0 +1,108 @@
+# =============================================================================
+# AeroPulse — development overrides. Auto-loaded by `docker compose up`.
+#
+# Adds: local image builds, host port mappings, bind-mounted source for
+# hot-reload, plaintext secrets from .env (fine for dev), no resource limits.
+# =============================================================================
+
+services:
+  kafka-1:
+    ports:
+      - "${KAFKA_PORT_ONE}:9094"
+
+  kafka-2:
+    ports:
+      - "${KAFKA_PORT_TWO}:9094"
+
+  kafka-3:
+    ports:
+      - "${KAFKA_PORT_THREE}:9094"
+
+  postgres:
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+  redis:
+    ports:
+      - "${REDIS_PORT}:6379"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+
+  qdrant:
+    ports:
+      - "${QDRANT_PORT_6333}:6333"
+      - "${QDRANT_PORT_6334}:6334"
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
+
+  spark:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./src:/opt/spark/work-dir/src
+
+  poller:
+    build: .
+    ports:
+      - "${POLLER_PORT}:8000"
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+  airflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    ports:
+      - "${AIRFLOW_PORT}:8080"
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: >-
+        postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/aeropulse_airflow
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD}
+      POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - ./src:/opt/airflow/src:ro
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "${API_PORT}:8000"
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    ports:
+      - "${DASHBOARD_PORT}:8501"
+
+  prometheus:
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+
+  grafana:
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+
+  loki:
+    ports:
+      - "${LOKI_PORT}:3100"

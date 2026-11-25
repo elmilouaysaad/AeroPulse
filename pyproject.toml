@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+timeout = 180
+markers = [
+    "integration: integration tests requiring Docker (testcontainers)",
+]

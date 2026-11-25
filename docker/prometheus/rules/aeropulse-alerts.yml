@@ -1,0 +1,48 @@
+groups:
+  - name: aeropulse_pipeline_alerts
+    interval: 15s
+    rules:
+      - alert: AeroPulseTargetDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scrape target {{ $labels.job }} ({{ $labels.instance }}) is down"
+          description: "Prometheus has been unable to scrape {{ $labels.job }} for more than 1 minute."
+
+      - alert: AeroPulseHighApiLatencyP95
+        expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, handler)) > 1.0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API p95 latency on {{ $labels.handler }}"
+          description: "5-minute p95 request latency is {{ $value | humanizeDuration }} (threshold: 1.0s)."
+
+      - alert: AeroPulsePollerStalled
+        expr: sum(rate(aeropulse_polls_total[5m])) == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No ADS-B polls recorded in the last 2 minutes"
+          description: "Poller scrape rate is zero over a 5-minute window."
+
+      - alert: AeroPulseParseErrorsSpike
+        expr: sum(rate(aeropulse_parse_errors_total[5m])) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated ADS-B parse errors"
+          description: "Parse error rate is {{ $value | printf \"%.3f\" }} errors/s."
+
+      - alert: AeroPulseSparkHighHeapUsage
+        expr: max(last_over_time({__name__=~"metrics_local_.*_driver_jvm_heap_usage_Value"}[5m])) > 0.85
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Spark driver JVM heap usage above 85%"
+          description: "Spark driver heap utilization reached {{ $value | humanizePercentage }}."

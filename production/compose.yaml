@@ -1,0 +1,337 @@
+# =============================================================================
+# AeroPulse — base composition (shared by all environments).
+#
+# Do NOT put dev conveniences (bind mounts, host ports) or prod hardening
+# (resource limits, secrets, restart policies) here. Use the override files.
+#
+# Dev:   docker compose up
+# Prod:  docker compose --env-file .env.prod -f compose.yaml -f compose.prod.yaml up -d
+# =============================================================================
+
+x-healthy: &healthy
+  # small helper: reuse the "wait for health" dependency block
+  condition: service_healthy
+
+services:
+  # ---------------------------------------------------------------------------
+  # Kafka cluster (KRaft)
+  # NOTE: PLAINTEXT only in this configuration. For production, add SASL/SSL.
+  # ---------------------------------------------------------------------------
+  kafka-1: &kafka-base
+    image: apache/kafka:3.7.0
+    container_name: aeropulse-kafka-1
+    environment:
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID}
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: ${KAFKA_CONTROLLER_QUORUM_VOTERS}
+      KAFKA_LISTENERS: ${KAFKA_LISTENERS}
+      KAFKA_ADVERTISED_LISTENERS: ${KAFKA_ADVERTISED_LISTENERS}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: ${KAFKA_LISTENER_SECURITY_PROTOCOL_MAP}
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 6
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - kafka-1-data:/var/lib/kafka/data
+
+  kafka-2:
+    <<: *kafka-base
+    container_name: aeropulse-kafka-2
+    environment:
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID}
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: ${KAFKA_CONTROLLER_QUORUM_VOTERS}
+      KAFKA_LISTENERS: ${KAFKA_LISTENERS}
+      KAFKA_ADVERTISED_LISTENERS: ${KAFKA_ADVERTISED_LISTENERS}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: ${KAFKA_LISTENER_SECURITY_PROTOCOL_MAP}
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 6
+
+  kafka-3:
+    <<: *kafka-base
+    container_name: aeropulse-kafka-3
+    environment:
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID}
+      KAFKA_NODE_ID: 3
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: ${KAFKA_CONTROLLER_QUORUM_VOTERS}
+      KAFKA_LISTENERS: ${KAFKA_LISTENERS}
+      KAFKA_ADVERTISED_LISTENERS: ${KAFKA_ADVERTISED_LISTENERS}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: ${KAFKA_LISTENER_SECURITY_PROTOCOL_MAP}
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 6
+
+  kafka-init:
+    image: apache/kafka:3.7.0
+    container_name: aeropulse-kafka-init
+    depends_on:
+      kafka-1: *healthy
+      kafka-2: *healthy
+      kafka-3: *healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        /opt/kafka/bin/kafka-topics.sh \
+          --bootstrap-server kafka-1:9092 \
+          --create --if-not-exists \
+          --topic aircraft_state \
+          --partitions 6 \
+          --replication-factor 3 \
+          --config min.insync.replicas=2
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16
+    container_name: aeropulse-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # Redis  (command and password are environment-specific)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: aeropulse-redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # Qdrant
+  # ---------------------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:v1.15.5
+    container_name: aeropulse-qdrant
+    volumes:
+      - qdrant-data:/var/lib/qdrant/storage
+    environment:
+      QDRANT__LOG_LEVEL: INFO
+
+  # ---------------------------------------------------------------------------
+  # Spark streaming detector
+  # Source code is baked into the image; bind mounts for hot-reload are DEV only.
+  # ---------------------------------------------------------------------------
+  spark:
+    image: aeropulse-spark:3.5.3
+    container_name: aeropulse-spark
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS}
+      KAFKA_TOPIC: ${KAFKA_TOPIC}
+      PYSPARK_PYTHON: python3
+      POSTGRES_USER: ${POSTGRES_USER}
+      SPARK_METRICS_CONF: /opt/spark/conf/metrics.properties
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master=local[4]
+      - --packages=org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3,org.postgresql:postgresql:42.7.4
+      - --conf=spark.jars.ivy=/tmp/.ivy2
+      - /opt/spark/work-dir/src/streaming/detector.py
+      - --sink=jdbc
+      - --jdbc-url=jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+    depends_on:
+      kafka-init: { condition: service_completed_successfully }
+      postgres:   *healthy
+    volumes:
+      - spark-checkpoints:/tmp/checkpoints
+      - ./docker/spark-metrics.properties:/opt/spark/conf/metrics.properties:ro
+
+  # ---------------------------------------------------------------------------
+  # Poller  (Kafka -> PostgreSQL ingestion)
+  # ---------------------------------------------------------------------------
+  poller:
+    image: aeropulse-poller:latest
+    container_name: aeropulse-poller
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS}
+      KAFKA_TOPIC: ${KAFKA_TOPIC}
+    command:
+      - python
+      - -m
+      - src.ingestion.poller
+      - --lat=40.6413
+      - --lon=-73.7781
+      - --dist=100
+      - --interval=15
+      - --iterations=1000
+    depends_on:
+      kafka-init: { condition: service_completed_successfully }
+
+  # ---------------------------------------------------------------------------
+  # Airflow  (standalone — see prod notes about splitting components)
+  # ---------------------------------------------------------------------------
+  airflow:
+    image: apache/airflow:2.10.0
+    container_name: aeropulse-airflow
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+      AIRFLOW__WEBSERVER__WORKERS: "2"
+      AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT: "300"
+      AIRFLOW_USERNAME: ${AIRFLOW_USERNAME}
+      AIRFLOW_ADMIN_FIRSTNAME: ${AIRFLOW_ADMIN_FIRSTNAME}
+      AIRFLOW_ADMIN_LASTNAME: ${AIRFLOW_ADMIN_LASTNAME}
+      AIRFLOW_EMAIL: ${AIRFLOW_EMAIL}
+      PYTHONPATH: /opt/airflow
+      HF_HOME: /home/airflow/.cache/huggingface
+      FASTEMBED_CACHE_PATH: /home/airflow/.cache/fastembed
+    command:
+      - bash
+      - -c
+      - |
+        set -e
+        airflow db migrate
+        airflow users create \
+          --username "${AIRFLOW_USERNAME}" \
+          --password "${AIRFLOW_PASSWORD}" \
+          --firstname "${AIRFLOW_ADMIN_FIRSTNAME}" \
+          --lastname "${AIRFLOW_ADMIN_LASTNAME}" \
+          --role Admin \
+          --email "${AIRFLOW_EMAIL}" || true
+        exec airflow standalone
+    depends_on:
+      postgres: *healthy
+      redis:    *healthy
+      qdrant:   { condition: service_started }
+    volumes:
+      - model-cache-airflow:/home/airflow/.cache
+
+  # ---------------------------------------------------------------------------
+  # FastAPI
+  # ---------------------------------------------------------------------------
+  api:
+    image: aeropulse-api:0.5.0
+    container_name: aeropulse-api
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      QDRANT_URL: http://qdrant:6333
+      HF_HOME: /home/appuser/.cache/huggingface
+      FASTEMBED_CACHE_PATH: /home/appuser/.cache/fastembed
+    depends_on:
+      postgres: *healthy
+      redis:    *healthy
+      qdrant:   { condition: service_started }
+    volumes:
+      - model-cache-api:/home/appuser/.cache
+
+  # ---------------------------------------------------------------------------
+  # Dashboard
+  # ---------------------------------------------------------------------------
+  dashboard:
+    image: aeropulse-dashboard:0.5.0
+    container_name: aeropulse-dashboard
+    environment:
+      API_URL: http://api:8000
+    depends_on:
+      api: { condition: service_started }
+
+  # ---------------------------------------------------------------------------
+  # Observability stack (unchanged; config files are bind-mounted in both envs)
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: aeropulse-prometheus
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    depends_on:
+      - api
+      - poller
+      - spark
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: aeropulse-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USERNAME}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - prometheus
+      - loki
+
+  loki:
+    image: grafana/loki:latest
+    container_name: aeropulse-loki
+    volumes:
+      - ./docker/loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: aeropulse-promtail
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./docker/promtail-config.yaml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+
+volumes:
+  kafka-1-data:
+  kafka-2-data:
+  kafka-3-data:
+  postgres-data:
+  spark-checkpoints:
+  qdrant-data:
+  model-cache-api:
+    external: true
+    name: aeropulse_model-cache-api
+  model-cache-airflow:
+    external: true
+    name: aeropulse_model-cache-airflow
+  prometheus-data:
+  grafana-data:
+  loki-data:
